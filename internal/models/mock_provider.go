@@ -1,13 +1,13 @@
 package models
 
 import (
-	"errors"
 	"fmt"
 )
 
 // MockModelProvider implements ModelProvider interface for testing
 type MockModelProvider struct {
 	models map[string]Model
+	config map[string]interface{}
 }
 
 // NewMockModelProvider creates a new mock model provider
@@ -39,6 +39,7 @@ func NewMockModelProvider() *MockModelProvider {
 
 	return &MockModelProvider{
 		models: models,
+		config: make(map[string]interface{}),
 	}
 }
 
@@ -60,7 +61,7 @@ func (m *MockModelProvider) ListModels() ([]Model, error) {
 func (m *MockModelProvider) GetModel(name string) (Model, error) {
 	model, exists := m.models[name]
 	if !exists {
-		return Model{}, errors.New(fmt.Sprintf("model %s not found", name))
+		return Model{}, fmt.Errorf("model %s not found", name)
 	}
 	return model, nil
 }
@@ -69,10 +70,44 @@ func (m *MockModelProvider) GetModel(name string) (Model, error) {
 func (m *MockModelProvider) CallModel(modelName, prompt string) (string, error) {
 	_, exists := m.models[modelName]
 	if !exists {
-		return "", errors.New(fmt.Sprintf("model %s not found", modelName))
+		return "", fmt.Errorf("model %s not found", modelName)
 	}
-	
+
 	// In a real implementation, this would call the actual model API
 	// For now, we'll just return a mock response
 	return fmt.Sprintf("Response from %s to prompt: %s", modelName, prompt), nil
+}
+
+// EstimateCost estimates the cost of using a model for a given number of tokens
+func (m *MockModelProvider) EstimateCost(modelName string, inputTokens, outputTokens int) (float64, error) {
+	model, exists := m.models[modelName]
+	if !exists {
+		return 0, fmt.Errorf("model %s not found", modelName)
+	}
+
+	// Calculate estimated cost
+	inputCost := float64(inputTokens) * model.CostPerToken
+	outputCost := float64(outputTokens) * model.CostPerToken
+	return inputCost + outputCost, nil
+}
+
+// GetTokenCount returns an estimated token count for the given text
+func (m *MockModelProvider) GetTokenCount(text string) (int, error) {
+	// A very rough approximation: divide character count by 4 to estimate tokens
+	if len(text) == 0 {
+		return 0, nil
+	}
+	return len([]rune(text)) / 4, nil
+}
+
+// Initialize sets up the provider with configuration
+func (m *MockModelProvider) Initialize(config map[string]interface{}) error {
+	m.config = config
+	return nil
+}
+
+// Close performs cleanup operations for the provider
+func (m *MockModelProvider) Close() error {
+	// For mock provider, no cleanup needed
+	return nil
 }

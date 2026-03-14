@@ -1,0 +1,134 @@
+# Route-Switch Configuration File with Multiple Provider Support via gollm
+
+model_providers:
+  openai:
+    api_key: "your-openai-api-key-here"
+    base_url: "https://api.openai.com/v1"
+    models:
+      - "gpt-4"
+      - "gpt-4-turbo"
+      - "gpt-4o"
+      - "gpt-3.5-turbo"
+    rate_limit: 1000
+  anthropic:
+    api_key: "your-anthropic-api-key-here"
+    models:
+      - "claude-3-opus-20240229"
+      - "claude-3-sonnet-20240229"
+      - "claude-3-haiku-20240307"
+      - "claude-3-5-sonnet-20241022"
+    rate_limit: 500
+  google:
+    api_key: "your-google-api-key-here"
+    models:
+      - "gemini-pro"
+      - "gemini-1.5-pro"
+    rate_limit: 1000
+  ollama:
+    # Ollama endpoint configuration
+    ollama_host: "http://localhost:11434"
+    # Optional API key if required by your setup
+    api_key: ""
+    models:
+      - "llama3"
+      - "mistral"
+      - "gemma:2b"
+    rate_limit: 2000  # Limited by local hardware
+  cohere:
+    api_key: "your-cohere-api-key-here"
+    models:
+      - "command-r"
+      - "command-r-plus"
+    rate_limit: 1000
+  mistral:
+    api_key: "your-mistral-api-key-here"
+    models:
+      - "mistral-small-latest"
+      - "mistral-medium-latest"
+      - "mistral-large-latest"
+    rate_limit: 1000
+
+mipro_v2:
+  num_candidates: 5
+  max_bootstrapped_demos: 3
+  max_labeled_demos: 2
+  num_trials: 15
+  minibatch_size: 5
+  minibatch_full_eval_steps: 3
+  num_instruction_candidates: 3
+  evaluation_strategy: "Similarity"
+
+evaluation:
+  default_strategy: "Similarity"
+  threshold: 0.7
+  max_retries: 3
+
+api:
+  timeout_seconds: 60
+  max_retries: 3
+
+gateway:
+  addr: ":8080"
+  strategy: "performance_based"
+  optimization:
+    enabled: true
+    interval_seconds: 3600
+    target_rps: 100
+  
+  # Define multiple prompt+model combinations using different providers
+  combinations:
+    # Creative content with OpenAI
+    - id: "creative-openai"
+      name: "creative-openai"
+      prompt: "Write creative and engaging content about the following topic:"
+      model: "gpt-4o"
+      provider: "openai"
+      is_primary: true
+      weight: 40
+      enabled: true
+      fallbacks: ["creative-anthropic"]
+      metadata:
+        category: "creative"
+        use_case: "content_generation"
+        
+    # Creative content with Anthropic as fallback
+    - id: "creative-anthropic"
+      name: "creative-anthropic"
+      prompt: "Write creative and engaging content about the following topic:"
+      model: "claude-3-5-sonnet-20241022"
+      provider: "anthropic"
+      is_primary: false
+      weight: 20
+      enabled: true
+      fallbacks: []
+      metadata:
+        category: "creative"
+        use_case: "content_generation"
+        
+    # Technical documentation with Google
+    - id: "tech-docs-google"
+      name: "tech-docs-google"
+      prompt: "Write clear and comprehensive technical documentation for:"
+      model: "gemini-1.5-pro"
+      provider: "google"
+      is_primary: true
+      weight: 30
+      enabled: true
+      fallbacks: ["tech-docs-openai"]
+      metadata:
+        category: "technical"
+        use_case: "documentation"
+        
+    # Technical documentation with OpenAI as fallback
+    - id: "tech-docs-openai"
+      name: "tech-docs-openai"
+      prompt: "Write clear and comprehensive technical documentation for:"
+      model: "gpt-4-turbo"
+      provider: "openai"
+      is_primary: false
+      weight: 10
+      enabled: true
+      fallbacks: []
+      metadata:
+        category: "technical"
+        use_case: "documentation"

@@ -1,0 +1,121 @@
+# Route-Switch Configuration File
+# This configuration defines multiple prompt+model combinations for a configuration-driven gateway
+
+model_providers:
+  openai:
+    api_key: "your-openai-api-key-here"
+    base_url: "https://api.openai.com/v1"
+    models:
+      - "gpt-4"
+      - "gpt-3.5-turbo"
+    rate_limit: 1000  # requests per minute
+  mock:
+    api_key: "mock-api-key"
+    models:
+      - "gpt-4"
+      - "gpt-3.5-turbo"
+      - "claude-2"
+
+mipro_v2:
+  num_candidates: 5
+  max_bootstrapped_demos: 3
+  max_labeled_demos: 2
+  num_trials: 15
+  minibatch_size: 5
+  minibatch_full_eval_steps: 3
+  num_instruction_candidates: 3
+  evaluation_strategy: "Similarity"
+
+evaluation:
+  default_strategy: "Similarity"
+  threshold: 0.7
+  max_retries: 3
+
+api:
+  timeout_seconds: 60
+  max_retries: 3
+
+gateway:
+  addr: ":8080"
+  strategy: "performance_based"  # Options: round_robin, random, weighted_round_robin, performance_based
+  optimization:
+    enabled: true
+    interval_seconds: 3600  # Optimize every hour
+    target_rps: 100  # Target requests per second for optimization
+  
+  # Define multiple prompt+model combinations
+  combinations:
+    # Primary creative content combination
+    - id: "creative-primary"
+      name: "creative-content-primary"
+      prompt: "Write creative and engaging content about the following topic:"
+      model: "gpt-4"
+      provider: "openai"
+      is_primary: true
+      weight: 70
+      enabled: true
+      fallbacks: ["creative-secondary", "creative-fallback"]
+      metadata:
+        category: "creative"
+        use_case: "content_generation"
+        optimized: false  # Will be optimized on startup
+        
+    # Secondary creative content combination (fallback)
+    - id: "creative-secondary" 
+      name: "creative-content-secondary"
+      prompt: "Generate creative content about:"
+      model: "gpt-3.5-turbo"
+      provider: "openai"
+      is_primary: false
+      weight: 20
+      enabled: true
+      fallbacks: ["creative-fallback"]
+      metadata:
+        category: "creative"
+        use_case: "content_generation"
+        optimized: false  # Will be optimized on startup
+        
+    # Fallback creative content combination
+    - id: "creative-fallback"
+      name: "creative-content-fallback"
+      prompt: "Write about:"
+      model: "gpt-3.5-turbo"
+      provider: "openai"
+      is_primary: false
+      weight: 10
+      enabled: true
+      fallbacks: []
+      metadata:
+        category: "creative"
+        use_case: "content_generation"
+        optimized: false  # Will be optimized on startup
+        
+    # Primary technical documentation combination
+    - id: "tech-primary"
+      name: "technical-docs-primary"
+      prompt: "Write clear and comprehensive technical documentation for:"
+      model: "gpt-4"
+      provider: "openai"
+      is_primary: true
+      weight: 60
+      enabled: true
+      fallbacks: ["tech-secondary"]
+      metadata:
+        category: "technical"
+        use_case: "documentation"
+        optimized: false  # Will be optimized on startup
+        
+    # Secondary technical documentation combination
+    - id: "tech-secondary"
+      name: "technical-docs-secondary"
+      prompt: "Document the following technical concept:"
+      model: "gpt-3.5-turbo"
+      provider: "openai"
+      is_primary: false
+      weight: 40
+      enabled: true
+      fallbacks: []
+      metadata:
+        category: "technical"
+        use_case: "documentation"
+        optimized: false  # Will be optimized on startup

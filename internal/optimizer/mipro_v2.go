@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skelf-research/route-switch/internal/models"
+	"github.com/skelf-research/route-switch/internal/config"
 )
 
 // MIPROv2Config holds configuration parameters for MIPROv2
@@ -40,27 +41,20 @@ type OptimizationResult struct {
 
 // MIPROv2 implements the MIPROv2 optimization algorithm
 type MIPROv2 struct {
-	config        MIPROv2Config
+	config        config.MiproV2Config
 	modelProvider models.ModelProvider
+	evaluator     models.EvaluationStrategy
+	bayesianOpt   BayesianOptimizer
 	rng           *rand.Rand
 }
 
 // NewMIPROv2 creates a new instance of MIPROv2 optimizer
-func NewMIPROv2() *MIPROv2 {
-	// Initialize with mock provider for now
-	provider := models.NewMockModelProvider()
-	
+func NewMIPROv2(provider models.ModelProvider, evaluator models.EvaluationStrategy, bayesianOpt BayesianOptimizer, config config.MiproV2Config) ExtendedPromptOptimizer {
 	return &MIPROv2{
-		config: MIPROv2Config{
-			NumCandidates:            5,
-			MaxBootstrappedDemos:     3,
-			MaxLabeledDemos:          2,
-			NumTrials:                10,
-			MinibatchSize:            5,
-			MinibatchFullEvalSteps:   3,
-			NumInstructionCandidates: 3,
-		},
+		config:        config,
 		modelProvider: provider,
+		evaluator:     evaluator,
+		bayesianOpt:   bayesianOpt,
 		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
@@ -196,30 +190,103 @@ func (m *MIPROv2) evaluatePrompt(prompt Prompt, modelName string) float64 {
 	// 1. Run the prompt on a validation set
 	// 2. Compare outputs to ground truth
 	// 3. Return a quality score
-	
+
 	// For this implementation, we'll return a random score weighted by some factors
 	factor := 1.0
-	
+
 	// More examples might be better (up to a point)
 	if len(prompt.Examples) > 0 {
 		factor += 0.1 * float64(len(prompt.Examples))
 	}
-	
+
 	// Longer instructions might be better (up to a point)
 	if len(prompt.Instruction) > 20 {
 		factor += 0.05
 	}
-	
+
 	// Generate a base score between 0.7 and 0.9, then apply factors
 	baseScore := 0.7 + m.rng.Float64()*0.2
 	score := baseScore * factor
-	
+
 	// Ensure score is between 0 and 1
 	if score > 1.0 {
 		score = 1.0
 	}
-	
+
 	return score
+}
+
+// OptimizePrompt implements the ExtendedPromptOptimizer interface
+func (m *MIPROv2) OptimizePrompt(basePrompt string, model models.Model, examples []models.Example) (*PromptOptimizationResult, error) {
+	// Convert models.Example to our internal Example type
+	internalExamples := make([]Example, len(examples))
+	for i, ex := range examples {
+		internalExamples[i] = Example{
+			Input:  ex.Input,
+			Output: ex.Output,
+		}
+	}
+
+	// Step 1: Bootstrap Few-Shot Examples
+	fmt.Println("Step 1: Bootstrapping few-shot examples...")
+	fewShotCandidates, err := m.bootstrapFewShotExamples(basePrompt, model.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to bootstrap few-shot examples: %w", err)
+	}
+
+	// Add the provided examples to the candidates
+	if len(internalExamples) > 0 {
+		fewShotCandidates = append(fewShotCandidates, internalExamples)
+	}
+
+	// Step 2: Propose Instruction Candidates
+	fmt.Println("Step 2: Proposing instruction candidates...")
+	instructionCandidates, err := m.proposeInstructionCandidates(basePrompt, model.Name, fewShotCandidates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to propose instruction candidates: %w", err)
+	}
+
+	// Step 3: Find an Optimized Combination using Bayesian Optimization
+	fmt.Println("Step 3: Finding optimized combination...")
+	result, err := m.optimizeCombination(basePrompt, model.Name, fewShotCandidates, instructionCandidates)
+	if err != nil {
+		return nil, fmt.Errorf("failed to optimize combination: %w", err)
+	}
+
+	// Construct the final optimized prompt
+	optimizedPrompt := m.constructPrompt(result.BestPrompt)
+
+	return &PromptOptimizationResult{
+		Prompt:   optimizedPrompt,
+		Score:    result.Score,
+		Metadata: map[string]interface{}{
+			"model": model.Name,
+			"instruction": result.BestPrompt.Instruction,
+			"num_examples": len(result.BestPrompt.Examples),
+		},
+	}, nil
+}
+
+// EvaluatePrompt implements the ExtendedPromptOptimizer interface
+func (m *MIPROv2) EvaluatePrompt(prompt string, model models.Model, examples []models.Example) (float64, error) {
+	// In a real implementation, this would evaluate the prompt quality using the configured evaluation strategy
+	// For now, we'll use our simplified evaluation method
+
+	// Create a simple prompt structure for evaluation
+	p := Prompt{
+		BasePrompt: prompt,
+	}
+
+	// Evaluate the prompt
+	score := m.evaluatePrompt(p, model.Name)
+	return score, nil
+}
+
+// GetBestCandidate implements the ExtendedPromptOptimizer interface
+func (m *MIPROv2) GetBestCandidate() *PromptOptimizationResult {
+	// This would typically return the best candidate found during optimization
+	// For this implementation, we return nil since we don't maintain state between calls
+	return nil
 }
 
 // constructPrompt builds a final prompt string from a Prompt struct
