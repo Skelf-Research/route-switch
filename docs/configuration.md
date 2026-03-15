@@ -68,7 +68,7 @@ Define as many providers as needed. Each entry maps a provider alias to credenti
 Controls the optimization loop. Increase `num_trials` for more thorough Bayesian searches or adjust `num_instruction_candidates` to generate additional instruction proposals.
 
 ### `evaluation`
-Sets the default evaluation strategy (Similarity, Keyword, ExactMatch, custom). `threshold` determines success/failure when computing improvement scores.
+Sets the default evaluation strategy (`Similarity`, `Keyword`, or `ExactMatch`) used by both CLI runs and the gateway unless overridden. `threshold` determines success/failure when computing improvement scores.
 
 ### `api`
 Tunables for provider HTTP calls: request timeout and retry count.
@@ -82,6 +82,7 @@ Tunables for provider HTTP calls: request timeout and retry count.
 - `strategy`: `round_robin`, `weighted_round_robin`, or `performance_based`.
 - `combinations`: optional static prompt/model combos; if omitted, CLI flags or prompt registration APIs can populate them at runtime.
 - `optimization`: background optimizer toggle plus interval (seconds).
+- `fallback_threshold`: optional success-rate floor (0-1). When a combination dips below it, the registry automatically reduces its weight and promotes configured fallbacks.
 
 ### `analytics`
 Configures the analytics sink (DuckDB by default). Specify the on-disk path for the database. Additional drivers can be added by implementing the analytics interface.

@@ -8,6 +8,7 @@ Route-Switch is a Go-powered prompt function manager that combines MIPROv2-style
 - **Gateway & inference endpoint** – expose a single OpenAI-compatible endpoint that handles prompt rendering, model selection, and failover.
 - **Analytics & packaging** – store request/response metadata in DuckDB (default) and export portable prompt packages with manifests, logs, and datasets for other environments.
 - **Extensible providers** – connect OpenAI, Anthropic, Google, Ollama, Cohere, Mistral, Hugging Face, or a mock provider through the gollm abstraction.
+- **Provider-aware throttling** – enforce per-provider RPM limits so production traffic never trips upstream quotas.
 
 ## Quick Start
 1. **Build the CLI**
@@ -74,6 +75,8 @@ Once running, send OpenAI-style chat requests to `POST /v1/chat/completions` and
 - `GET /status` – snapshot of every prompt/model combination plus live performance metrics.
 - `GET /v1/prompts/{id}/stats` – aggregated success rate, latency, and cost for a specific template or combination ID.
 - `GET /v1/system/analytics` – global request totals backed by the DuckDB analytics store.
+- `GET /health/storage` – verifies dataset + analytics backends before you hook the gateway behind load balancers.
+- Streaming responses follow the OpenAI chunk format; send `{"stream":true}` to receive incremental deltas with usage totals in the last chunk.
 
 Route-Switch talks to upstream providers exclusively through the [gollm](https://github.com/teilomillet/gollm) adapter. Declare each upstream provider under `model_providers`, then use `--provider gollm` (default) to fan out across all configured backends, or pass a specific provider name (e.g., `--provider openai`) to restrict routing to that subset.
 
@@ -148,6 +151,12 @@ Hydrate a package onto another machine (manifest, dataset, logs, and optional an
   --overwrite
 ```
 The importer copies `manifest.yaml` and `support-flow.db` into your configured `dataset.base_path`, restores `logs/recent.jsonl` under the template directory, and replaces the DuckDB file at `analytics.path` when `--restore-analytics` is provided. Use `--overwrite` when you intentionally want to replace an existing manifest/dataset/analytics file.
+
+## Operational CLI Helpers
+- `./route-switch template list --config config.yaml` prints every registered template (ID + name).
+- `./route-switch gateway combinations --config config.yaml` inspects the currently configured prompt/model pairs and their weights.
+- Override the evaluator globally or per run with `--evaluation-strategy similarity|keyword|exact`; template manifests can also provide `metadata.evaluation_strategy`.
+- Target a specific prompt combination or template via API metadata: include `{"metadata":{"combination_id":"combo-1"}}` or `{"metadata":{"template_id":"support-flow"}}` to bypass load-balancer selection.
 
 ## Documentation
 - [Architecture](docs/architecture.md)

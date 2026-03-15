@@ -251,45 +251,36 @@ func TestGollmProviderEstimateCost(t *testing.T) {
 
 func TestGollmProviderDetectProviderType(t *testing.T) {
 	provider := NewGollmProvider()
+	// Clear cost calculator to use deterministic heuristic-based detection
+	// This avoids flaky tests due to varying LiteLLM API data
+	provider.costCalculator = nil
 
-	// Test that provider detection works for common models
-	// Note: LiteLLM may return more specific provider names (e.g., "vertex_ai-anthropic_models")
-	// so we check that the result contains expected keywords or is a valid provider
+	// Test that provider detection works for common models using heuristics
 	tests := []struct {
-		modelName          string
-		expectedContains   []string // Any of these strings should be in the result
-		notExpected        []string // These strings should NOT be in the result (for stricter validation)
+		modelName string
+		expected  string
 	}{
-		{"gpt-4", []string{"openai"}, nil},
-		{"gpt-3.5-turbo", []string{"openai"}, nil},
-		{"o1-preview", []string{"openai"}, nil},
-		{"claude-3-opus", []string{"anthropic", "claude", "vertex"}, nil},
-		{"claude-3-5-sonnet", []string{"anthropic", "claude", "vertex"}, nil},
-		{"gemini-pro", []string{"google", "vertex"}, nil},
-		{"gemini-1.5-pro", []string{"google", "vertex"}, nil},
-		{"command-r", []string{"cohere"}, nil},
-		{"llama3", []string{"ollama", "llama"}, nil},
-		{"codellama", []string{"ollama", "code", "llama"}, nil},
-		{"huggingface-model", []string{"huggingface"}, nil},
-		{"hf-model", []string{"huggingface", "hf"}, nil},
+		{"gpt-4", "openai"},
+		{"gpt-3.5-turbo", "openai"},
+		{"o1-preview", "openai"},
+		{"claude-3-opus", "anthropic"},
+		{"claude-3-5-sonnet", "anthropic"},
+		{"gemini-pro", "google"},
+		{"gemini-1.5-pro", "google"},
+		{"command-r", "cohere"},
+		{"llama3", "ollama"},
+		{"codellama", "ollama"},
+		{"huggingface-model", "huggingface"},
+		{"hf-model", "huggingface"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.modelName, func(t *testing.T) {
 			result := provider.detectProviderType(tt.modelName)
 
-			// Check that the result contains at least one expected substring
-			found := false
-			for _, expected := range tt.expectedContains {
-				if containsAny(result, []string{expected}) {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				t.Errorf("detectProviderType(%q) = %q, expected to contain one of %v",
-					tt.modelName, result, tt.expectedContains)
+			if result != tt.expected {
+				t.Errorf("detectProviderType(%q) = %q, want %q",
+					tt.modelName, result, tt.expected)
 			}
 		})
 	}
@@ -672,4 +663,19 @@ func TestGollmProviderDifferentProviderConfigs(t *testing.T) {
 			name:         "Ollama config with host",
 			providerType: "ollama",
 			config: map[string]interface{}{
-				"ollama_host": "http://loc
+				"ollama_host": "http://localhost:11434",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewGollmProvider()
+			err := provider.Initialize(tt.config)
+			// We don't expect errors for configuration, only for actual API calls
+			if err != nil {
+				t.Logf("Note: Initialize returned error (expected without real credentials): %v", err)
+			}
+		})
+	}
+}

@@ -2,11 +2,19 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// failingRoundTripper is an http.RoundTripper that always fails
+type failingRoundTripper struct{}
+
+func (f *failingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("mock transport failure")
+}
 
 func TestNewCostCalculator(t *testing.T) {
 	calculator := NewCostCalculator()
@@ -412,7 +420,11 @@ func TestGetMaxTokens(t *testing.T) {
 }
 
 func TestGetProviderForModel(t *testing.T) {
-	calculator := NewCostCalculator()
+	// Use a mock HTTP client that fails to ensure deterministic fallback pricing
+	failingClient := &http.Client{
+		Transport: &failingRoundTripper{},
+	}
+	calculator := NewCostCalculator(WithHTTPClient(failingClient))
 
 	tests := []struct {
 		name             string

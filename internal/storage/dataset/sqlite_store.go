@@ -112,7 +112,7 @@ func (s *SQLiteStore) AddRecord(ctx context.Context, promptID string, record *Re
 		return fmt.Errorf("insert record: %w", err)
 	}
 
-	return s.prune(ctx, db)
+	return s.prune(ctx, db, promptID)
 }
 
 // ListRecent returns most recent records up to limit
@@ -123,7 +123,7 @@ func (s *SQLiteStore) ListRecent(ctx context.Context, promptID string, limit int
 	}
 
 	rows, err := db.QueryContext(ctx, `SELECT id, prompt_id, model, input, output, variables, success, cost, metadata, created_at
-		FROM examples ORDER BY created_at DESC LIMIT ?`, limit)
+		FROM examples WHERE prompt_id = ? ORDER BY created_at DESC LIMIT ?`, promptID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent records: %w", err)
 	}
@@ -161,18 +161,18 @@ func (s *SQLiteStore) TotalCount(ctx context.Context, promptID string) (int64, e
 		return 0, err
 	}
 	var count int64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM examples`).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM examples WHERE prompt_id = ?`, promptID).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count records: %w", err)
 	}
 	return count, nil
 }
 
-func (s *SQLiteStore) prune(ctx context.Context, db *sql.DB) error {
+func (s *SQLiteStore) prune(ctx context.Context, db *sql.DB, promptID string) error {
 	if s.maxRecords <= 0 {
 		return nil
 	}
 	_, err := db.ExecContext(ctx, `DELETE FROM examples WHERE id IN (
-		SELECT id FROM examples ORDER BY created_at DESC LIMIT -1 OFFSET ?)`, s.maxRecords)
+		SELECT id FROM examples WHERE prompt_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?)`, promptID, s.maxRecords)
 	if err != nil {
 		return fmt.Errorf("prune records: %w", err)
 	}

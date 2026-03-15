@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/skelf-research/route-switch/internal/models"
+	"github.com/skelf-research/route-switch/internal/utils"
 )
 
 // PromptCombination represents an optimized prompt for a specific model
@@ -20,6 +21,7 @@ type PromptCombination struct {
 	LastOptimized time.Time
 	Performance   *PerformanceMetrics
 	Metadata      map[string]interface{}
+	Fallbacks     []string
 }
 
 // PerformanceMetrics tracks performance of a prompt+model combination
@@ -31,10 +33,28 @@ type PerformanceMetrics struct {
 	LastUsed        time.Time
 }
 
+// Registry defines the interface for managing prompt+model combinations
+type Registry interface {
+	AddCombination(combination *PromptCombination) error
+	GetCombination(id string) (*PromptCombination, bool)
+	GetCombinationByName(name string) (*PromptCombination, bool)
+	GetAllCombinations() []*PromptCombination
+	GetActiveCombinations() []*PromptCombination
+	GetCombinationsByProvider(provider string) []*PromptCombination
+	RemoveCombination(id string) error
+	UpdatePerformance(id string, responseTime time.Duration, success bool, cost float64) error
+	UpdateWeight(id string, weight int) error
+	SetFallbackThreshold(threshold float64)
+}
+
+// Ensure PromptRegistry implements Registry interface
+var _ Registry = (*PromptRegistry)(nil)
+
 // PromptRegistry manages multiple prompt+model combinations
 type PromptRegistry struct {
-	mu           sync.RWMutex
-	combinations map[string]*PromptCombination
+	mu                sync.RWMutex
+	combinations      map[string]*PromptCombination
+	fallbackThreshold float64
 }
 
 // NewPromptRegistry creates a new prompt registry
@@ -63,6 +83,13 @@ func (pr *PromptRegistry) AddCombination(combination *PromptCombination) error {
 
 	pr.combinations[combination.ID] = combination
 	return nil
+}
+
+// SetFallbackThreshold configures automatic fallback promotion threshold.
+func (pr *PromptRegistry) SetFallbackThreshold(threshold float64) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.fallbackThreshold = threshold
 }
 
 // GetCombination retrieves a prompt+model combination by ID
@@ -147,7 +174,36 @@ func (pr *PromptRegistry) UpdatePerformance(id string, responseTime time.Duratio
 	metrics.TotalRequests = totalRequests
 	metrics.LastUsed = time.Now()
 
+	pr.applyFallbackLogic(combination)
 	return nil
+}
+
+func (pr *PromptRegistry) applyFallbackLogic(combination *PromptCombination) {
+	if pr.fallbackThreshold <= 0 {
+		return
+	}
+	metrics := combination.Performance
+	if metrics == nil || metrics.TotalRequests < 10 {
+		return
+	}
+	if metrics.SuccessRate >= pr.fallbackThreshold {
+		return
+	}
+	if combination.Weight > 1 {
+		combination.Weight = combination.Weight / 2
+		if combination.Weight < 1 {
+			combination.Weight = 1
+		}
+	}
+	for _, fallbackID := range combination.Fallbacks {
+		if fallback, ok := pr.combinations[fallbackID]; ok {
+			fallback.Weight += 5
+		}
+	}
+	utils.LogEvent("fallback_promoted", map[string]interface{}{
+		"combination_id": combination.ID,
+		"success_rate":   metrics.SuccessRate,
+	})
 }
 
 // GetCombinationsByProvider returns combinations for a specific provider
@@ -178,4 +234,18 @@ func (pr *PromptRegistry) GetActiveCombinations() []*PromptCombination {
 	}
 
 	return combinations
+}
+
+// UpdateWeight updates the weight of a combination with proper locking
+func (pr *PromptRegistry) UpdateWeight(id string, weight int) error {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	combination, exists := pr.combinations[id]
+	if !exists {
+		return models.ErrNotFound
+	}
+
+	combination.Weight = weight
+	return nil
 }

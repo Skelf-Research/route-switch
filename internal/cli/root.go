@@ -29,6 +29,7 @@ var (
 	startGateway   bool
 	gatewayAddr    string
 	help           bool
+	evalStrategy   string
 )
 
 var rootCmd = &cobra.Command{
@@ -77,6 +78,23 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 			os.Exit(1)
 		}
 
+		datasetStore, err := dataset.NewSQLiteStore(configManager.GetConfig().Dataset.BasePath, configManager.GetConfig().Dataset.MaxRecords)
+		if err != nil {
+			fmt.Printf("Failed to initialize dataset store: %v\n", err)
+			os.Exit(1)
+		}
+		defer datasetStore.Close()
+
+		selectedStrategy := evalStrategy
+		if selectedStrategy == "" && templateManifest != nil && templateManifest.Metadata != nil {
+			if val, ok := templateManifest.Metadata["evaluation_strategy"].(string); ok {
+				selectedStrategy = val
+			}
+		}
+		if selectedStrategy == "" {
+			selectedStrategy = configManager.GetConfig().Evaluation.DefaultStrategy
+		}
+
 		provider, err := newModelProvider(modelProvider, configManager.GetConfig())
 		if err != nil {
 			fmt.Printf("Error initializing model provider: %v\n", err)
@@ -84,7 +102,11 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 		}
 
 		// Initialize evaluation strategy
-		evaluator := models.NewSimilarityEvaluationStrategy()
+		evaluator, err := models.NewEvaluationStrategy(selectedStrategy)
+		if err != nil {
+			fmt.Printf("Error initializing evaluation strategy: %v\n", err)
+			os.Exit(1)
+		}
 
 		// Initialize Bayesian optimizer
 		bayesianOpt, err := optimizer.NewGoptunaBayesianOptimizer(map[string]interface{}{
@@ -104,6 +126,7 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 			Evaluator:     evaluator,
 			Optimizer:     opt,
 			Config:        configManager.GetConfig(),
+			DatasetStore:  datasetStore,
 		}
 
 		// Initialize the optimizer service
@@ -112,7 +135,12 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 		// Handle different operation modes
 		switch {
 		case optimizePrompt:
-			result, err := service.OptimizePrompt(prompt, model)
+			templateID := ""
+			if templateManifest != nil {
+				templateID = templateManifest.ID
+			}
+
+			result, err := service.OptimizePromptWithTemplate(prompt, model, templateID)
 			if err != nil {
 				fmt.Printf("Error optimizing prompt: %v\n", err)
 				os.Exit(1)
@@ -123,7 +151,12 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 				fmt.Printf("Cost: $%.6f\n", result.Cost)
 			}
 		case findBestModel:
-			result, err := service.FindBestModel(prompt, model)
+			templateID := ""
+			if templateManifest != nil {
+				templateID = templateManifest.ID
+			}
+
+			result, err := service.FindBestModelWithTemplate(prompt, model, templateID)
 			if err != nil {
 				fmt.Printf("Error finding best model: %v\n", err)
 				os.Exit(1)
@@ -162,7 +195,7 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 	}
 	defer datasetStore.Close()
 
-	var analyticsStore analytics.Store
+	var analyticsStore analytics.AnalyticsStore
 	switch strings.ToLower(appConfig.Analytics.Driver) {
 	case "", "duckdb":
 		analyticsStore, err = analytics.NewDuckDBStore(appConfig.Analytics.Path)
@@ -175,7 +208,21 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 	}
 	defer analyticsStore.Close()
 
-	evaluator := models.NewSimilarityEvaluationStrategy()
+	selectedStrategy := evalStrategy
+	if selectedStrategy == "" && templateManifest != nil && templateManifest.Metadata != nil {
+		if val, ok := templateManifest.Metadata["evaluation_strategy"].(string); ok {
+			selectedStrategy = val
+		}
+	}
+	if selectedStrategy == "" {
+		selectedStrategy = configManager.GetConfig().Evaluation.DefaultStrategy
+	}
+
+	evaluator, err := models.NewEvaluationStrategy(selectedStrategy)
+	if err != nil {
+		fmt.Printf("Failed to initialize evaluation strategy: %v\n", err)
+		os.Exit(1)
+	}
 
 	bayesianOpt, err := optimizer.NewGoptunaBayesianOptimizer(map[string]interface{}{
 		"num_trials": configManager.GetConfig().MiproV2.NumTrials,
@@ -192,6 +239,7 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 		Evaluator:     evaluator,
 		Optimizer:     opt,
 		Config:        configManager.GetConfig(),
+		DatasetStore:  datasetStore,
 	}
 
 	gatewayConfig := &gateway.GatewayConfig{
@@ -202,7 +250,10 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 	}
 
 	if len(appConfig.Gateway.Combinations) == 0 && prompt != "" && model != "" {
-		meta := map[string]interface{}{"source": "cli_args"}
+		meta := map[string]interface{}{
+			"source":          "cli_args",
+			"original_prompt": prompt,
+		}
 		if templateManifest != nil {
 			meta["template_id"] = templateManifest.ID
 		}
@@ -263,21 +314,30 @@ func newModelProvider(providerAlias string, cfg *config.Config) (models.ModelPro
 func buildGollmProviderConfig(cfg *config.Config, alias string) (map[string]interface{}, error) {
 	includeAll := alias == "" || alias == "gollm"
 	configMap := make(map[string]interface{})
+	providerConfigs := make(map[string]map[string]interface{})
 
 	for name, providerCfg := range cfg.ModelProviders {
 		if !includeAll && strings.ToLower(name) != alias {
 			continue
 		}
-		configMap[name] = map[string]interface{}{
+		key := strings.ToLower(name)
+		providerConfigs[key] = map[string]interface{}{
 			"api_key":    providerCfg.APIKey,
 			"base_url":   providerCfg.BaseURL,
 			"models":     providerCfg.Models,
 			"rate_limit": providerCfg.RateLimit,
 			"options":    providerCfg.Options,
 		}
+		if providerCfg.APIKey != "" {
+			configMap[fmt.Sprintf("%s_api_key", key)] = providerCfg.APIKey
+		}
 	}
 
-	if len(configMap) == 0 {
+	if len(providerConfigs) > 0 {
+		configMap["providers"] = providerConfigs
+	}
+
+	if len(providerConfigs) == 0 {
 		if includeAll {
 			return nil, errors.New("no model providers configured for gollm")
 		}
@@ -297,6 +357,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&findBestModel, "find-best-model", "f", false, "Find the best model and optimized prompt combination")
 	rootCmd.Flags().BoolVarP(&startGateway, "gateway", "g", false, "Start as a gateway server")
 	rootCmd.Flags().StringVarP(&gatewayAddr, "addr", "a", ":8080", "Gateway server address")
+	rootCmd.Flags().StringVar(&evalStrategy, "evaluation-strategy", "", "Override evaluation strategy (similarity, keyword, exact)")
 	rootCmd.Flags().BoolVarP(&help, "help", "h", false, "Display help information")
 }
 

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,6 +22,16 @@ const (
 
 // LeastConnectionsStrategy constant
 const LeastConnectionsStrategy = LeastConnections
+
+// Balancer defines the interface for load balancing across prompt+model combinations
+type Balancer interface {
+	SelectCombination() (*PromptCombination, error)
+	UpdateStrategy(strategy LoadBalancerStrategy)
+	GetStrategy() LoadBalancerStrategy
+}
+
+// Ensure LoadBalancer implements Balancer interface
+var _ Balancer = (*LoadBalancer)(nil)
 
 // LoadBalancer distributes requests across different prompt+model combinations
 type LoadBalancer struct {
@@ -73,6 +84,11 @@ func (lb *LoadBalancer) roundRobinSelection(combinations []*PromptCombination) (
 	if len(combinations) == 0 {
 		return nil, models.ErrNotFound
 	}
+
+	// Sort by ID to ensure deterministic ordering regardless of map iteration order
+	sort.Slice(combinations, func(i, j int) bool {
+		return combinations[i].ID < combinations[j].ID
+	})
 
 	selected := combinations[lb.rrCounter%len(combinations)]
 	lb.rrCounter++

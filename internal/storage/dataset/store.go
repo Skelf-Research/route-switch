@@ -19,8 +19,8 @@ type Record struct {
 	CreatedAt time.Time
 }
 
-// Store defines persistence for prompt datasets
-type Store interface {
+// DatasetStore defines persistence for prompt datasets
+type DatasetStore interface {
 	AddRecord(ctx context.Context, promptID string, record *Record) error
 	ListRecent(ctx context.Context, promptID string, limit int) ([]*Record, error)
 	TotalCount(ctx context.Context, promptID string) (int64, error)

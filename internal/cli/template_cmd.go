@@ -25,6 +25,35 @@ var templateCmd = &cobra.Command{
 	Short: "Manage prompt templates",
 }
 
+var templateListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List registered prompt templates",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgManager := config.NewSimpleConfigManager()
+		if configFile != "" {
+			if err := cfgManager.Load(configFile); err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+		}
+		manager, err := templates.NewManager(cfgManager.GetConfig().Dataset.BasePath)
+		if err != nil {
+			return err
+		}
+		manifests, err := manager.List()
+		if err != nil {
+			return err
+		}
+		if len(manifests) == 0 {
+			fmt.Println("No templates registered")
+			return nil
+		}
+		for _, manifest := range manifests {
+			fmt.Printf("- %s (%s)\n", manifest.ID, manifest.Name)
+		}
+		return nil
+	},
+}
+
 var templateRegisterCmd = &cobra.Command{
 	Use:   "register",
 	Short: "Register a new prompt template",
@@ -91,5 +120,6 @@ func init() {
 	templateRegisterCmd.Flags().StringVar(&templateDefaultProvider, "default-provider", "", "Default provider alias for this template")
 
 	templateCmd.AddCommand(templateRegisterCmd)
+	templateCmd.AddCommand(templateListCmd)
 	rootCmd.AddCommand(templateCmd)
 }

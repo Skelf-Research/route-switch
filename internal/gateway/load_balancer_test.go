@@ -41,39 +41,49 @@ func TestLoadBalancer_RoundRobinSelection(t *testing.T) {
 		t.Errorf("Expected 2 active combinations, got %d", activeCount)
 	}
 
-	// Test round-robin selection
-	firstChoice, err := loadBalancer.SelectCombination()
-	if err != nil {
-		t.Fatalf("SelectCombination failed: %v", err)
+	// Make multiple selections and verify round-robin behavior
+	// With 2 combinations, we should see both within any 2 consecutive selections
+	const numSelections = 10
+	selections := make([]*PromptCombination, numSelections)
+	seenIDs := make(map[string]int)
+
+	for i := 0; i < numSelections; i++ {
+		choice, err := loadBalancer.SelectCombination()
+		if err != nil {
+			t.Fatalf("SelectCombination %d failed: %v", i, err)
+		}
+		selections[i] = choice
+		seenIDs[choice.ID]++
 	}
 
-	secondChoice, err := loadBalancer.SelectCombination()
-	if err != nil {
-		t.Fatalf("SelectCombination failed: %v", err)
+	// Verify both combinations were selected
+	if len(seenIDs) != 2 {
+		t.Errorf("Round-robin should use all combinations, but only saw %d unique IDs: %v", len(seenIDs), seenIDs)
 	}
 
-	thirdChoice, err := loadBalancer.SelectCombination()
-	if err != nil {
-		t.Fatalf("SelectCombination failed: %v", err)
+	// Verify distribution is roughly even (within tolerance for round-robin)
+	for id, count := range seenIDs {
+		if count < 3 || count > 7 {
+			t.Errorf("Combination %s was selected %d times, expected roughly 5 times for even distribution", id, count)
+		}
 	}
 
-	t.Logf("Selections: %s, %s, %s", firstChoice.ID, secondChoice.ID, thirdChoice.ID)
-
-	// With round-robin and 2 combinations, we should get alternating selections
-	// But due to map iteration order, we can't rely on which one comes first.
-	// However, if first and second are same, then it's definitely not round robin
-	if firstChoice.ID == secondChoice.ID {
-		t.Errorf("Round-robin should alternate selections. Got %s twice in a row", firstChoice.ID)
+	// Verify round-robin pattern: consecutive selections should mostly alternate
+	// (allowing some tolerance due to the index-based approach with varying slice order)
+	alternations := 0
+	for i := 1; i < numSelections; i++ {
+		if selections[i].ID != selections[i-1].ID {
+			alternations++
+		}
 	}
 
-	// The third selection should be back to the first one in the cycle
-	// (assuming the map maintained the same order between calls)
-	if thirdChoice.ID != firstChoice.ID {
-		t.Log("Note: Due to map iteration randomness, this test may occasionally fail for reasons unrelated to round-robin algorithm correctness.")
-		t.Log("The round-robin algorithm is working correctly if first and second choices are different.")
-		// We'll still note if this specific cycling doesn't happen, but won't error for it
-		// because it's expected behavior due to non-deterministic map iteration
+	// With proper round-robin and 2 items, we expect 9 alternations out of 9 possible
+	// since combinations are sorted by ID for deterministic ordering.
+	if alternations != numSelections-1 {
+		t.Errorf("Round-robin should alternate every selection. Got %d alternations out of %d possible", alternations, numSelections-1)
 	}
+
+	t.Logf("Round-robin test: %d selections, %d unique combinations, %d alternations", numSelections, len(seenIDs), alternations)
 }
 
 func TestLoadBalancer_WeightedRoundRobinSelection(t *testing.T) {

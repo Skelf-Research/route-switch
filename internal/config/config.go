@@ -30,6 +30,7 @@ type GatewayConfig struct {
 	Strategy     string                    `json:"strategy" yaml:"strategy"`
 	Combinations []PromptCombinationConfig `json:"combinations" yaml:"combinations"`
 	Optimization OptimizationConfig        `json:"optimization" yaml:"optimization"`
+	FallbackThreshold float64              `json:"fallback_threshold" yaml:"fallback_threshold"`
 }
 
 // PromptCombinationConfig holds configuration for a prompt+model combination

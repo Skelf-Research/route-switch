@@ -295,19 +295,27 @@ func TestTransformRequest(t *testing.T) {
 
 	transformedReq := proxy.transformRequest(originalReq, combination)
 
-	// Check that the message content includes the optimized prompt
-	if len(transformedReq.Messages) == 0 {
-		t.Fatal("Transformed request has no messages")
+	// Check that the transformation added a system message
+	if len(transformedReq.Messages) < 2 {
+		t.Fatalf("Expected at least 2 messages (system + user), got %d", len(transformedReq.Messages))
 	}
 
+	// First message should be the system prompt
+	systemMessage := transformedReq.Messages[0]
+	if systemMessage.Role != "system" {
+		t.Errorf("Expected first message to be system role, got %s", systemMessage.Role)
+	}
+	if systemMessage.Content != combination.Prompt {
+		t.Errorf("Expected system message content to be combination prompt, got: %s", systemMessage.Content)
+	}
+
+	// Last message should be the original user message
 	lastMessage := transformedReq.Messages[len(transformedReq.Messages)-1]
 	if lastMessage.Role != "user" {
-		t.Errorf("Expected user role, got %s", lastMessage.Role)
+		t.Errorf("Expected last message to be user role, got %s", lastMessage.Role)
 	}
-
-	// The content should contain both the optimized prompt and the original request
-	if len(lastMessage.Content) <= len("How are you?") {
-		t.Errorf("Transformed content should be longer than original, got: %s", lastMessage.Content)
+	if lastMessage.Content != "How are you?" {
+		t.Errorf("Expected original user content preserved, got: %s", lastMessage.Content)
 	}
 
 	if transformedReq.Model != "gpt-4" {

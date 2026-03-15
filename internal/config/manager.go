@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -45,6 +46,9 @@ func NewSimpleConfigManager() *SimpleConfigManager {
 				Driver: "duckdb",
 				Path:   "data/analytics/metrics.duckdb",
 			},
+			Gateway: GatewayConfig{
+				FallbackThreshold: 0.0,
+			},
 		},
 	}
 }
@@ -64,7 +68,61 @@ func (scm *SimpleConfigManager) Load(configPath string) error {
 		}
 	}
 
+	// Override API keys from environment variables
+	scm.applyEnvironmentOverrides()
+
 	return scm.Validate()
+}
+
+// applyEnvironmentOverrides overrides configuration values from environment variables.
+// Environment variable naming convention:
+//   - ROUTE_SWITCH_<PROVIDER>_API_KEY for provider API keys (e.g., ROUTE_SWITCH_OPENAI_API_KEY)
+//   - ROUTE_SWITCH_ANALYTICS_PATH for analytics database path
+//   - ROUTE_SWITCH_DATASET_PATH for dataset base path
+func (scm *SimpleConfigManager) applyEnvironmentOverrides() {
+	// Override provider API keys
+	for providerName, providerCfg := range scm.config.ModelProviders {
+		envKey := fmt.Sprintf("ROUTE_SWITCH_%s_API_KEY", strings.ToUpper(providerName))
+		if apiKey := os.Getenv(envKey); apiKey != "" {
+			providerCfg.APIKey = apiKey
+			scm.config.ModelProviders[providerName] = providerCfg
+		}
+	}
+
+	// Also check for common provider environment variables as fallback
+	providerEnvMappings := map[string][]string{
+		"openai":     {"OPENAI_API_KEY"},
+		"anthropic":  {"ANTHROPIC_API_KEY"},
+		"google":     {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
+		"cohere":     {"COHERE_API_KEY"},
+		"mistral":    {"MISTRAL_API_KEY"},
+		"huggingface": {"HUGGINGFACE_API_KEY", "HF_API_KEY"},
+	}
+
+	for providerName, envVars := range providerEnvMappings {
+		providerCfg, exists := scm.config.ModelProviders[providerName]
+		if !exists {
+			continue
+		}
+		// Only override if API key is empty (don't override explicit config or ROUTE_SWITCH_ vars)
+		if providerCfg.APIKey == "" {
+			for _, envVar := range envVars {
+				if apiKey := os.Getenv(envVar); apiKey != "" {
+					providerCfg.APIKey = apiKey
+					scm.config.ModelProviders[providerName] = providerCfg
+					break
+				}
+			}
+		}
+	}
+
+	// Override other sensitive paths
+	if path := os.Getenv("ROUTE_SWITCH_ANALYTICS_PATH"); path != "" {
+		scm.config.Analytics.Path = path
+	}
+	if path := os.Getenv("ROUTE_SWITCH_DATASET_PATH"); path != "" {
+		scm.config.Dataset.BasePath = path
+	}
 }
 
 // Save saves configuration to a file
@@ -145,6 +203,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Analytics.Driver == "duckdb" && c.Analytics.Path == "" {
 		return fmt.Errorf("analytics path must be provided for duckdb driver")
+	}
+	if c.Gateway.FallbackThreshold < 0 || c.Gateway.FallbackThreshold > 1 {
+		return fmt.Errorf("gateway fallback threshold must be between 0 and 1")
 	}
 
 	return nil

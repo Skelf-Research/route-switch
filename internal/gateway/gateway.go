@@ -38,8 +38,11 @@ type GatewayConfig struct {
 }
 
 // NewGateway creates a new gateway instance
-func NewGateway(serviceConfig *core.ServiceConfig, gatewayConfig *GatewayConfig, appConfig *config.Config, datasetStore dataset.Store, analyticsStore analytics.Store) (*Gateway, error) {
+func NewGateway(serviceConfig *core.ServiceConfig, gatewayConfig *GatewayConfig, appConfig *config.Config, datasetStore dataset.DatasetStore, analyticsStore analytics.AnalyticsStore) (*Gateway, error) {
 	registry := NewPromptRegistry()
+	if appConfig.Gateway.FallbackThreshold > 0 {
+		registry.SetFallbackThreshold(appConfig.Gateway.FallbackThreshold)
+	}
 	loadBalancer := NewLoadBalancer(registry, gatewayConfig.LoadBalancerStrategy)
 
 	proxy := NewProxyServer(registry, loadBalancer, gatewayConfig.Addr, datasetStore, analyticsStore)
@@ -82,8 +85,12 @@ func (g *Gateway) loadCombinationsFromConfig(appConfig *config.Config) error {
 			comboConfig.Metadata = make(map[string]interface{})
 		}
 
+		if comboConfig.Metadata["original_prompt"] == nil {
+			comboConfig.Metadata["original_prompt"] = comboConfig.Prompt
+		}
+
 		if comboConfig.Metadata["optimized"] == nil || comboConfig.Metadata["optimized"] == false {
-			result, err := g.service.OptimizePrompt(comboConfig.Prompt, comboConfig.Model)
+			result, err := g.service.OptimizePromptWithTemplate(comboConfig.Prompt, comboConfig.Model, comboConfig.TemplateID)
 			if err != nil {
 				fmt.Printf("Warning: Failed to optimize prompt for %s, using original: %v\n", comboConfig.Name, err)
 				optimizedPrompt = comboConfig.Prompt
@@ -115,6 +122,7 @@ func (g *Gateway) loadCombinationsFromConfig(appConfig *config.Config) error {
 			Model:      comboConfig.Model,
 			Provider:   comboConfig.Provider,
 			Weight:     comboConfig.Weight,
+			Fallbacks:  comboConfig.Fallbacks,
 			CreatedAt:  time.Now(),
 			Performance: &PerformanceMetrics{
 				SuccessRate: 1.0, // Start with 100% success rate
@@ -145,7 +153,7 @@ func (g *Gateway) RegisterProvider(name string, provider models.ModelProvider) {
 // AddPromptCombination adds a new prompt+model combination to the gateway
 func (g *Gateway) AddPromptCombination(prompt, modelName, providerName, name string) error {
 	// First, optimize the prompt for the specific model
-	optimizedResult, err := g.service.OptimizePrompt(prompt, modelName)
+	optimizedResult, err := g.service.OptimizePromptWithTemplate(prompt, modelName, fmt.Sprintf("%s-template", name))
 	if err != nil {
 		return fmt.Errorf("failed to optimize prompt: %w", err)
 	}
@@ -200,13 +208,7 @@ func (g *Gateway) GetActiveCombinations() []*PromptCombination {
 
 // UpdateCombinationWeight updates the weight of a combination for load balancing
 func (g *Gateway) UpdateCombinationWeight(id string, weight int) error {
-	combination, exists := g.registry.GetCombination(id)
-	if !exists {
-		return models.ErrNotFound
-	}
-
-	combination.Weight = weight
-	return nil // The registry stores the pointer, so this updates it in place
+	return g.registry.UpdateWeight(id, weight)
 }
 
 // BackgroundOptimizer handles automatic optimization of prompt combinations
@@ -277,7 +279,7 @@ func (bo *BackgroundOptimizer) optimizeCombination(combination *PromptCombinatio
 	}
 
 	// Re-optimize the prompt for the same model
-	optimizedResult, err := bo.gateway.service.OptimizePrompt(originalPrompt, combination.Model)
+	optimizedResult, err := bo.gateway.service.OptimizePromptWithTemplate(originalPrompt, combination.Model, combination.TemplateID)
 	if err != nil {
 		// Log error but continue with other combinations
 		return

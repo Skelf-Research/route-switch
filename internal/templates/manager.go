@@ -81,6 +81,26 @@ func (m *Manager) Load(id string) (*Manifest, error) {
 	return &manifest, nil
 }
 
+// List returns all manifests stored under the base path.
+func (m *Manager) List() ([]*Manifest, error) {
+	entries, err := os.ReadDir(m.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	var manifests []*Manifest
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		manifest, err := m.Load(entry.Name())
+		if err != nil {
+			continue
+		}
+		manifests = append(manifests, manifest)
+	}
+	return manifests, nil
+}
+
 func writeYAML(path string, v interface{}) error {
 	data, err := yamlMarshal(v)
 	if err != nil {

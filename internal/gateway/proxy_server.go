@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -68,14 +69,14 @@ type ProxyServer struct {
 	providers      map[string]models.ModelProvider
 	httpClient     *http.Client
 	addr           string
-	datasetStore   dataset.Store
-	analyticsStore analytics.Store
+	datasetStore   dataset.DatasetStore
+	analyticsStore analytics.AnalyticsStore
 	server         *http.Server
 	mux            *http.ServeMux
 }
 
 // NewProxyServer creates a new proxy server instance
-func NewProxyServer(registry *PromptRegistry, loadBalancer *LoadBalancer, addr string, datasetStore dataset.Store, analyticsStore analytics.Store) *ProxyServer {
+func NewProxyServer(registry *PromptRegistry, loadBalancer *LoadBalancer, addr string, datasetStore dataset.DatasetStore, analyticsStore analytics.AnalyticsStore) *ProxyServer {
 	mux := http.NewServeMux()
 	ps := &ProxyServer{
 		registry:     registry,
@@ -104,6 +105,7 @@ func NewProxyServer(registry *PromptRegistry, loadBalancer *LoadBalancer, addr s
 func (ps *ProxyServer) registerHandlers() {
 	ps.mux.HandleFunc("/v1/chat/completions", ps.handleChatCompletions)
 	ps.mux.HandleFunc("/health", ps.handleHealth)
+	ps.mux.HandleFunc("/health/storage", ps.handleStorageHealth)
 	ps.mux.HandleFunc("/status", ps.handleStatus)
 	ps.mux.HandleFunc("/v1/system/analytics", ps.handleSystemAnalytics)
 	ps.mux.HandleFunc("/v1/prompts/", ps.handlePromptStats)
@@ -134,36 +136,52 @@ func (ps *ProxyServer) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Select the appropriate prompt+model combination
-	combination, err := ps.loadBalancer.SelectCombination()
+	// Select the appropriate prompt+model combination (respecting overrides)
+	combination, err := ps.resolveCombination(req)
 	if err != nil {
-		http.Error(w, "No available model combinations", http.StatusServiceUnavailable)
+		if errors.Is(err, models.ErrNotFound) {
+			http.Error(w, "no prompt combinations available", http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 
+	// Apply request-scoped overrides without mutating the registry entry
+	effectiveCombination := *combination
+	if req.Model != "" {
+		effectiveCombination.Model = req.Model
+	}
+	if overrideModel := metadataString(req.Metadata, "model"); overrideModel != "" {
+		effectiveCombination.Model = overrideModel
+	}
+	if overrideProvider := metadataString(req.Metadata, "provider"); overrideProvider != "" {
+		effectiveCombination.Provider = overrideProvider
+	}
+
 	// Transform the request using the optimized prompt
-	transformedReq := ps.transformRequest(req, combination)
+	transformedReq := ps.transformRequest(req, &effectiveCombination)
 
 	// Get the appropriate provider
-	provider, exists := ps.providers[combination.Provider]
+	provider, exists := ps.providers[effectiveCombination.Provider]
 	if !exists {
-		http.Error(w, fmt.Sprintf("Provider %s not available", combination.Provider), http.StatusServiceUnavailable)
+		http.Error(w, fmt.Sprintf("Provider %s not available", effectiveCombination.Provider), http.StatusServiceUnavailable)
 		return
 	}
 
 	// Call the model provider
 	startTime := time.Now()
-	response, renderedPrompt, err := ps.callProvider(provider, combination.Model, transformedReq)
+	response, renderedPrompt, err := ps.callProvider(provider, effectiveCombination.Model, transformedReq)
 	duration := time.Since(startTime)
 
 	if err != nil {
 		// Update performance metrics with failure
 		ps.registry.UpdatePerformance(combination.ID, duration, false, 0)
-		ps.recordDatasetEntry(ctx, combination, renderedPrompt, "", false, 0, map[string]interface{}{
+		ps.recordDatasetEntry(ctx, &effectiveCombination, renderedPrompt, "", false, 0, map[string]interface{}{
 			"error":            err.Error(),
 			"request_metadata": transformedReq.Metadata,
 		}, transformedReq.Variables)
-		ps.recordAnalyticsEntry(ctx, combination, duration, false, 0, 0, 0, map[string]interface{}{
+		ps.recordAnalyticsEntry(ctx, &effectiveCombination, duration, false, 0, 0, 0, map[string]interface{}{
 			"error": err.Error(),
 		})
 		http.Error(w, fmt.Sprintf("Provider error: %v", err), http.StatusInternalServerError)
@@ -173,18 +191,23 @@ func (ps *ProxyServer) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 	// Calculate cost
 	inputTokens := response.Usage.PromptTokens
 	outputTokens := response.Usage.CompletionTokens
-	cost, _ := provider.EstimateCost(combination.Model, inputTokens, outputTokens)
+	cost, _ := provider.EstimateCost(effectiveCombination.Model, inputTokens, outputTokens)
 
 	// Update performance metrics
 	ps.registry.UpdatePerformance(combination.ID, duration, true, cost)
-	ps.recordDatasetEntry(ctx, combination, renderedPrompt, response.Choices[0].Message.Content, true, cost, map[string]interface{}{
+	ps.recordDatasetEntry(ctx, &effectiveCombination, renderedPrompt, response.Choices[0].Message.Content, true, cost, map[string]interface{}{
 		"request_metadata": transformedReq.Metadata,
 		"input_tokens":     inputTokens,
 		"output_tokens":    outputTokens,
 	}, transformedReq.Variables)
-	ps.recordAnalyticsEntry(ctx, combination, duration, true, cost, inputTokens, outputTokens, transformedReq.Metadata)
+	ps.recordAnalyticsEntry(ctx, &effectiveCombination, duration, true, cost, inputTokens, outputTokens, transformedReq.Metadata)
 
-	// Send response
+	// Send response (support streaming)
+	if transformedReq.Stream {
+		ps.writeStreamResponse(w, response)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
@@ -192,34 +215,26 @@ func (ps *ProxyServer) handleChatCompletions(w http.ResponseWriter, r *http.Requ
 
 // transformRequest transforms the incoming request using the optimized prompt
 func (ps *ProxyServer) transformRequest(req Request, combination *PromptCombination) Request {
-	// For now, we'll replace the first user message with our optimized prompt
-	// In a real implementation, we'd intelligently integrate the optimized prompt
-	// with the user's actual request
 	renderedPrompt := renderTemplate(combination.Prompt, req.Variables)
 
-	if len(req.Messages) > 0 {
-		// Create a new message that combines the optimized prompt with the user's input
-		combinedContent := fmt.Sprintf("%s\n\nUser Request: %s", renderedPrompt, req.Messages[len(req.Messages)-1].Content)
-		req.Messages[len(req.Messages)-1] = Message{
-			Role:    "user",
-			Content: combinedContent,
-		}
-	} else {
-		// If no messages, create one with the optimized prompt
-		req.Messages = []Message{
-			{Role: "user", Content: renderedPrompt},
-		}
-	}
+	systemMessage := Message{Role: "system", Content: renderedPrompt}
+	newMessages := []Message{systemMessage}
+	newMessages = append(newMessages, req.Messages...)
+	req.Messages = newMessages
 
 	return req
 }
 
 // callProvider calls the appropriate model provider with the request
 func (ps *ProxyServer) callProvider(provider models.ModelProvider, modelName string, req Request) (*Response, string, error) {
-	// Convert our request structure to the format expected by the model provider
-	// For now, we'll just concatenate messages to form a single prompt
 	var promptBuilder strings.Builder
 	for _, msg := range req.Messages {
+		role := strings.ToUpper(msg.Role)
+		if role == "" {
+			role = "USER"
+		}
+		promptBuilder.WriteString(role)
+		promptBuilder.WriteString(": ")
 		promptBuilder.WriteString(msg.Content)
 		promptBuilder.WriteString("\n")
 	}
@@ -351,6 +366,31 @@ func (ps *ProxyServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (ps *ProxyServer) handleStorageHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	datasetStatus := "unavailable"
+	if ps.datasetStore != nil {
+		if _, err := ps.datasetStore.TotalCount(ctx, "__health__"); err == nil {
+			datasetStatus = "ok"
+		}
+	}
+
+	analyticsStatus := "unavailable"
+	if ps.analyticsStore != nil {
+		if _, err := ps.analyticsStore.QuerySystemStats(ctx); err == nil {
+			analyticsStatus = "ok"
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"dataset":   datasetStatus,
+		"analytics": analyticsStatus,
+	})
+}
+
 // handleStatus returns current combination status and latest analytics.
 func (ps *ProxyServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -459,6 +499,116 @@ func (ps *ProxyServer) fetchPromptStats(ctx context.Context, templateID, fallbac
 		return nil
 	}
 	return stats
+}
+
+func (ps *ProxyServer) resolveCombination(req Request) (*PromptCombination, error) {
+	if id := metadataString(req.Metadata, "combination_id"); id != "" {
+		if combo, ok := ps.registry.GetCombination(id); ok {
+			return combo, nil
+		}
+		return nil, fmt.Errorf("combination %s not found", id)
+	}
+
+	if templateID := metadataString(req.Metadata, "template_id"); templateID != "" {
+		for _, combo := range ps.registry.GetAllCombinations() {
+			if combo.TemplateID == templateID {
+				return combo, nil
+			}
+		}
+		return nil, fmt.Errorf("template %s not registered", templateID)
+	}
+
+	if req.Model != "" {
+		for _, combo := range ps.registry.GetAllCombinations() {
+			if combo.Model == req.Model {
+				return combo, nil
+			}
+		}
+	}
+
+	return ps.loadBalancer.SelectCombination()
+}
+
+func metadataString(meta map[string]interface{}, key string) string {
+	if meta == nil {
+		return ""
+	}
+	if value, ok := meta[key]; ok {
+		if str, ok := value.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+func (ps *ProxyServer) writeStreamResponse(w http.ResponseWriter, resp *Response) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	chunks := chunkContent(resp.Choices[0].Message.Content)
+	for _, chunk := range chunks {
+		event := map[string]interface{}{
+			"id":     resp.ID,
+			"object": "chat.completion.chunk",
+			"choices": []map[string]interface{}{
+				{
+					"index": 0,
+					"delta": map[string]interface{}{
+						"role":    "assistant",
+						"content": chunk,
+					},
+					"finish_reason": nil,
+				},
+			},
+		}
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	done := map[string]interface{}{
+		"id":     resp.ID,
+		"object": "chat.completion.chunk",
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{},
+				"finish_reason": resp.Choices[0].FinishReason,
+			},
+		},
+		"usage": resp.Usage,
+	}
+	data, _ := json.Marshal(done)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func chunkContent(content string) []string {
+	const chunkSize = 200
+	if len(content) <= chunkSize {
+		return []string{content}
+	}
+
+	var chunks []string
+	runes := []rune(content)
+	for start := 0; start < len(runes); start += chunkSize {
+		end := start + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[start:end]))
+	}
+	return chunks
 }
 
 // AddCombination adds a prompt+model combination to the registry through the proxy

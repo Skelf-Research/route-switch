@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Store persists invocation analytics for prompts/templates.
-type Store interface {
+// AnalyticsStore persists invocation analytics for prompts/templates.
+type AnalyticsStore interface {
 	RecordInvocation(ctx context.Context, record *InvocationRecord) error
 	QueryPromptStats(ctx context.Context, filter StatsFilter) (*PromptStats, error)
 	QuerySystemStats(ctx context.Context) (*SystemStats, error)

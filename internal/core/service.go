@@ -1,23 +1,27 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/skelf-research/route-switch/internal/config"
 	"github.com/skelf-research/route-switch/internal/models"
 	"github.com/skelf-research/route-switch/internal/optimizer"
+	"github.com/skelf-research/route-switch/internal/storage/dataset"
 )
 
 // Service errors
 var (
-	ErrNilServiceConfig  = errors.New("service configuration cannot be nil")
-	ErrNilModelProvider  = errors.New("model provider cannot be nil")
-	ErrNilOptimizer      = errors.New("optimizer cannot be nil")
-	ErrNilEvaluator      = errors.New("evaluator cannot be nil")
-	ErrNoModelsAvailable = errors.New("no models available for optimization")
-	ErrEmptyPrompt       = errors.New("prompt cannot be empty")
-	ErrEmptyModel        = errors.New("model name cannot be empty")
+	ErrNilServiceConfig   = errors.New("service configuration cannot be nil")
+	ErrNilModelProvider   = errors.New("model provider cannot be nil")
+	ErrNilOptimizer       = errors.New("optimizer cannot be nil")
+	ErrNilEvaluator       = errors.New("evaluator cannot be nil")
+	ErrNoModelsAvailable  = errors.New("no models available for optimization")
+	ErrEmptyPrompt        = errors.New("prompt cannot be empty")
+	ErrEmptyModel         = errors.New("model name cannot be empty")
 	ErrOptimizationFailed = errors.New("optimization failed")
 )
 
@@ -27,6 +31,15 @@ type Service struct {
 	optimizer     optimizer.ExtendedPromptOptimizer
 	evaluator     models.EvaluationStrategy
 	config        *config.Config
+	datasetStore  dataset.DatasetStore
+	cacheMu       sync.RWMutex
+	exampleCache  map[string]examplesCacheEntry
+	cacheTTL      time.Duration
+}
+
+type examplesCacheEntry struct {
+	examples []models.Example
+	expires  time.Time
 }
 
 // Result represents the output of operations
@@ -45,6 +58,7 @@ type ServiceConfig struct {
 	Evaluator     models.EvaluationStrategy
 	Optimizer     optimizer.ExtendedPromptOptimizer
 	Config        *config.Config
+	DatasetStore  dataset.DatasetStore
 }
 
 // Validate validates the service configuration
@@ -75,6 +89,9 @@ func NewService(serviceConfig *ServiceConfig) *Service {
 		optimizer:     serviceConfig.Optimizer,
 		evaluator:     serviceConfig.Evaluator,
 		config:        serviceConfig.Config,
+		datasetStore:  serviceConfig.DatasetStore,
+		exampleCache:  make(map[string]examplesCacheEntry),
+		cacheTTL:      defaultExampleCacheTTL(serviceConfig.Config),
 	}
 }
 
@@ -89,11 +106,19 @@ func NewServiceWithValidation(serviceConfig *ServiceConfig) (*Service, error) {
 		optimizer:     serviceConfig.Optimizer,
 		evaluator:     serviceConfig.Evaluator,
 		config:        serviceConfig.Config,
+		datasetStore:  serviceConfig.DatasetStore,
+		exampleCache:  make(map[string]examplesCacheEntry),
+		cacheTTL:      defaultExampleCacheTTL(serviceConfig.Config),
 	}, nil
 }
 
 // OptimizePrompt optimizes a prompt for a specific model
 func (s *Service) OptimizePrompt(prompt, model string) (*Result, error) {
+	return s.OptimizePromptWithTemplate(prompt, model, "")
+}
+
+// OptimizePromptWithTemplate optimizes a prompt with an optional template ID used for dataset lookups
+func (s *Service) OptimizePromptWithTemplate(prompt, model, templateID string) (*Result, error) {
 	// Validate inputs
 	if prompt == "" {
 		return nil, ErrEmptyPrompt
@@ -116,8 +141,8 @@ func (s *Service) OptimizePrompt(prompt, model string) (*Result, error) {
 		return nil, fmt.Errorf("model not available: %w", err)
 	}
 
-	// Prepare initial examples (in a real implementation, these would come from a dataset)
-	examples := s.getDefaultExamples()
+	// Prepare examples sourced from the dataset when available
+	examples := s.getExamples(templateID)
 
 	// Use the optimizer to improve the prompt for the given model
 	optimizationResult, err := s.optimizer.OptimizePrompt(prompt, modelInfo, examples)
@@ -151,6 +176,11 @@ func (s *Service) OptimizePrompt(prompt, model string) (*Result, error) {
 
 // FindBestModel finds the best model and optimizes the prompt for it
 func (s *Service) FindBestModel(prompt, baseModel string) (*Result, error) {
+	return s.FindBestModelWithTemplate(prompt, baseModel, "")
+}
+
+// FindBestModelWithTemplate finds the best model while leveraging dataset context identified by templateID.
+func (s *Service) FindBestModelWithTemplate(prompt, baseModel, templateID string) (*Result, error) {
 	// Validate inputs
 	if prompt == "" {
 		return nil, ErrEmptyPrompt
@@ -179,7 +209,7 @@ func (s *Service) FindBestModel(prompt, baseModel string) (*Result, error) {
 	var lastError error
 
 	// Get examples
-	examples := s.getDefaultExamples()
+	examples := s.getExamples(templateID)
 
 	// Try each model and find the best combination of quality and cost
 	for _, modelInfo := range modelsList {
@@ -282,6 +312,72 @@ func (s *Service) getDefaultExamples() []models.Example {
 		{Input: "Explain quantum computing", Output: "Quantum computing uses quantum bits..."},
 		{Input: "Describe the water cycle", Output: "The water cycle involves evaporation..."},
 	}
+}
+
+// getExamples attempts to fetch examples for a template from the dataset store, falling back to defaults.
+func (s *Service) getExamples(templateID string) []models.Example {
+	if templateID == "" || s.datasetStore == nil {
+		return s.getDefaultExamples()
+	}
+
+	if cached := s.getCachedExamples(templateID); cached != nil {
+		return cached
+	}
+
+	ctx := context.Background()
+	limit := 10
+	if s.config != nil && s.config.MiproV2.MinibatchSize > 0 {
+		limit = s.config.MiproV2.MinibatchSize * 2
+	}
+
+	records, err := s.datasetStore.ListRecent(ctx, templateID, limit)
+	if err != nil || len(records) == 0 {
+		return s.getDefaultExamples()
+	}
+
+	examples := make([]models.Example, 0, len(records))
+	for _, record := range records {
+		if record == nil || record.Input == "" || record.Output == "" {
+			continue
+		}
+		examples = append(examples, models.Example{
+			Input:  record.Input,
+			Output: record.Output,
+		})
+	}
+
+	if len(examples) == 0 {
+		return s.getDefaultExamples()
+	}
+
+	s.storeExamples(templateID, examples)
+	return examples
+}
+
+func (s *Service) getCachedExamples(templateID string) []models.Example {
+	s.cacheMu.RLock()
+	entry, ok := s.exampleCache[templateID]
+	s.cacheMu.RUnlock()
+	if !ok || time.Now().After(entry.expires) {
+		return nil
+	}
+	return entry.examples
+}
+
+func (s *Service) storeExamples(templateID string, examples []models.Example) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.exampleCache[templateID] = examplesCacheEntry{
+		examples: examples,
+		expires:  time.Now().Add(s.cacheTTL),
+	}
+}
+
+func defaultExampleCacheTTL(cfg *config.Config) time.Duration {
+	if cfg != nil && cfg.Gateway.Optimization.Interval > 0 {
+		return time.Duration(cfg.Gateway.Optimization.Interval/2) * time.Second
+	}
+	return 5 * time.Minute
 }
 
 // GetModelProvider returns the service's model provider

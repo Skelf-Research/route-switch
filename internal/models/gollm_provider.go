@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/skelf-research/route-switch/internal/utils"
 	gollm "github.com/teilomillet/gollm"
@@ -12,17 +14,23 @@ import (
 
 // GollmProvider implements the ModelProvider interface using the gollm library
 type GollmProvider struct {
-	providerType   string
-	config         map[string]interface{}
-	llms           map[string]gollm.LLM
-	costCalculator *utils.CostCalculator
+	providerType    string
+	config          map[string]interface{}
+	providerConfigs map[string]map[string]interface{}
+	modelAliases    map[string]string
+	rateLimiters    map[string]*rateLimiter
+	llms            map[string]gollm.LLM
+	costCalculator  *utils.CostCalculator
 }
 
 // NewGollmProvider creates a new provider using gollm
 func NewGollmProvider() *GollmProvider {
 	return &GollmProvider{
-		llms:           make(map[string]gollm.LLM),
-		costCalculator: utils.NewCostCalculator(),
+		llms:            make(map[string]gollm.LLM),
+		costCalculator:  utils.NewCostCalculator(),
+		providerConfigs: make(map[string]map[string]interface{}),
+		modelAliases:    make(map[string]string),
+		rateLimiters:    make(map[string]*rateLimiter),
 	}
 }
 
@@ -31,11 +39,42 @@ func (g *GollmProvider) Name() string {
 	return "GollmProvider"
 }
 
-// ListModels returns all available models (implementation will depend on provider)
+// ListModels returns all configured models across providers.
 func (g *GollmProvider) ListModels() ([]Model, error) {
-	// This would require querying each provider for available models
-	// For now, we'll return an empty list and populate dynamically as needed
-	return []Model{}, nil
+	configs := g.providerConfigs
+	if len(configs) == 0 && g.config != nil {
+		if generic, ok := g.config["providers"].(map[string]interface{}); ok {
+			configs = make(map[string]map[string]interface{})
+			for name, raw := range generic {
+				if typed, ok := raw.(map[string]interface{}); ok {
+					configs[name] = typed
+				}
+			}
+		}
+	}
+
+	if len(configs) == 0 {
+		return []Model{}, nil
+	}
+
+	seen := make(map[string]struct{})
+	var models []Model
+
+	for _, cfg := range configs {
+		for _, modelName := range toStringSlice(cfg["models"]) {
+			if _, ok := seen[modelName]; ok {
+				continue
+			}
+			modelInfo, err := g.GetModel(modelName)
+			if err != nil {
+				continue
+			}
+			models = append(models, modelInfo)
+			seen[modelName] = struct{}{}
+		}
+	}
+
+	return models, nil
 }
 
 // GetModel returns a specific model by name
@@ -116,6 +155,12 @@ func (g *GollmProvider) CallModel(modelName, prompt string) (string, error) {
 	// Create a prompt using gollm's prompt system
 	gollmPrompt := gollm.NewPrompt(prompt)
 
+	if limiter := g.getRateLimiter(modelName); limiter != nil {
+		if err := limiter.Allow(); err != nil {
+			return "", err
+		}
+	}
+
 	// Generate response
 	response, err := llm.Generate(context.Background(), gollmPrompt)
 	if err != nil {
@@ -164,6 +209,20 @@ func (g *GollmProvider) Initialize(config map[string]interface{}) error {
 		return fmt.Errorf("configuration cannot be nil")
 	}
 	g.config = config
+	if providers, ok := config["providers"].(map[string]map[string]interface{}); ok {
+		g.providerConfigs = providers
+	} else if generic, ok := config["providers"].(map[string]interface{}); ok {
+		normalized := make(map[string]map[string]interface{})
+		for name, raw := range generic {
+			if typed, ok := raw.(map[string]interface{}); ok {
+				normalized[name] = typed
+			}
+		}
+		if len(normalized) > 0 {
+			g.providerConfigs = normalized
+		}
+	}
+	g.setupRateLimiters()
 	return nil
 }
 
@@ -313,4 +372,101 @@ func containsAny(s string, substrings []string) bool {
 		}
 	}
 	return false
+}
+
+func toStringSlice(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		var out []string
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func (g *GollmProvider) getRateLimiter(modelName string) *rateLimiter {
+	alias := g.getModelAlias(modelName)
+	if alias == "" {
+		alias = g.detectProviderType(modelName)
+	}
+	return g.rateLimiters[strings.ToLower(alias)]
+}
+
+func (g *GollmProvider) getModelAlias(modelName string) string {
+	if alias, ok := g.modelAliases[modelName]; ok {
+		return alias
+	}
+	for alias, cfg := range g.providerConfigs {
+		for _, m := range toStringSlice(cfg["models"]) {
+			g.modelAliases[m] = alias
+		}
+	}
+	return g.modelAliases[modelName]
+}
+
+func (g *GollmProvider) setupRateLimiters() {
+	for alias, cfg := range g.providerConfigs {
+		rate := toInt(cfg["rate_limit"])
+		if rate <= 0 {
+			continue
+		}
+		g.rateLimiters[strings.ToLower(alias)] = newRateLimiter(rate)
+	}
+}
+
+func toInt(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+type rateLimiter struct {
+	mu        sync.Mutex
+	capacity  float64
+	tokens    float64
+	fillRate  float64
+	lastCheck time.Time
+}
+
+func newRateLimiter(requestsPerMinute int) *rateLimiter {
+	return &rateLimiter{
+		capacity:  float64(requestsPerMinute),
+		tokens:    float64(requestsPerMinute),
+		fillRate:  float64(requestsPerMinute) / 60.0,
+		lastCheck: time.Now(),
+	}
+}
+
+func (r *rateLimiter) Allow() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(r.lastCheck).Seconds()
+	r.lastCheck = now
+	r.tokens += elapsed * r.fillRate
+	if r.tokens > r.capacity {
+		r.tokens = r.capacity
+	}
+
+	if r.tokens < 1 {
+		return ErrRateLimited
+	}
+
+	r.tokens -= 1
+	return nil
 }
