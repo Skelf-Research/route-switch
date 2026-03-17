@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -38,50 +37,42 @@ var rootCmd = &cobra.Command{
 	Long: `Route-Switch is a tool that implements MIPROv2 for prompt optimization and model switching.
 It can optimize your existing prompt or find the best model for your prompt while keeping cost in mind.
 Route-Switch can also run as an advanced gateway for multiple prompt+model combinations.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if help {
-			cmd.Help()
-			return
+			return cmd.Help()
 		}
 
 		// Load configuration
 		configManager := config.NewSimpleConfigManager()
 		if configFile != "" {
-			err := configManager.Load(configFile)
-			if err != nil {
-				fmt.Printf("Error loading config: %v\n", err)
-				os.Exit(1)
+			if err := configManager.Load(configFile); err != nil {
+				return fmt.Errorf("loading config: %w", err)
 			}
 		}
 
 		prompt, model, modelProvider, templateManifest, err := applyTemplateDefaults(cmd, configManager.GetConfig(), prompt, model, modelProvider)
 		if err != nil {
-			fmt.Printf("Error applying template defaults: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("applying template defaults: %w", err)
 		}
 
 		if startGateway {
-			runGateway(cmd, configManager, templateManifest, prompt, model, modelProvider)
-			return
+			return runGatewayE(cmd, configManager, templateManifest, prompt, model, modelProvider)
 		}
 
 		// Validate required parameters for command-line operations
 		if prompt == "" {
-			fmt.Println("Error: prompt is required (use --template-id or --prompt)")
 			cmd.Help()
-			os.Exit(1)
+			return fmt.Errorf("prompt is required (use --template-id or --prompt)")
 		}
 
 		if model == "" {
-			fmt.Println("Error: model is required (use --template-id or --model)")
 			cmd.Help()
-			os.Exit(1)
+			return fmt.Errorf("model is required (use --template-id or --model)")
 		}
 
 		datasetStore, err := dataset.NewSQLiteStore(configManager.GetConfig().Dataset.BasePath, configManager.GetConfig().Dataset.MaxRecords)
 		if err != nil {
-			fmt.Printf("Failed to initialize dataset store: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("initializing dataset store: %w", err)
 		}
 		defer datasetStore.Close()
 
@@ -97,15 +88,13 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 
 		provider, err := newModelProvider(modelProvider, configManager.GetConfig())
 		if err != nil {
-			fmt.Printf("Error initializing model provider: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("initializing model provider: %w", err)
 		}
 
 		// Initialize evaluation strategy
 		evaluator, err := models.NewEvaluationStrategy(selectedStrategy)
 		if err != nil {
-			fmt.Printf("Error initializing evaluation strategy: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("initializing evaluation strategy: %w", err)
 		}
 
 		// Initialize Bayesian optimizer
@@ -113,8 +102,7 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 			"num_trials": configManager.GetConfig().MiproV2.NumTrials,
 		})
 		if err != nil {
-			fmt.Printf("Failed to initialize Bayesian optimizer: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("initializing Bayesian optimizer: %w", err)
 		}
 
 		// Initialize the MIPROv2 optimizer with all dependencies
@@ -142,8 +130,7 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 
 			result, err := service.OptimizePromptWithTemplate(prompt, model, templateID)
 			if err != nil {
-				fmt.Printf("Error optimizing prompt: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("optimizing prompt: %w", err)
 			}
 			fmt.Printf("Optimized Prompt: %s\n", result.OptimizedPrompt)
 			fmt.Printf("Model: %s\n", result.Model)
@@ -158,8 +145,7 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 
 			result, err := service.FindBestModelWithTemplate(prompt, model, templateID)
 			if err != nil {
-				fmt.Printf("Error finding best model: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("finding best model: %w", err)
 			}
 			fmt.Printf("Optimized Prompt: %s\n", result.OptimizedPrompt)
 			fmt.Printf("Best Model: %s\n", result.Model)
@@ -168,30 +154,28 @@ Route-Switch can also run as an advanced gateway for multiple prompt+model combi
 				fmt.Printf("Improvement Score: %.4f\n", result.ImprovementScore)
 			}
 		default:
-			fmt.Println("Please specify an operation mode: --optimize-prompt or --find-best-model")
 			cmd.Help()
-			os.Exit(1)
+			return fmt.Errorf("please specify an operation mode: --optimize-prompt or --find-best-model")
 		}
 
 		// Close the provider when done
 		provider.Close()
+		return nil
 	},
 }
 
-// runGateway starts the gateway server
-func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, templateManifest *templates.Manifest, prompt, model, providerAlias string) {
+// runGatewayE starts the gateway server and returns any errors
+func runGatewayE(cmd *cobra.Command, configManager *config.SimpleConfigManager, templateManifest *templates.Manifest, prompt, model, providerAlias string) error {
 	appConfig := configManager.GetConfig()
 
 	provider, err := newModelProvider(providerAlias, appConfig)
 	if err != nil {
-		fmt.Printf("Error initializing model provider: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initializing model provider: %w", err)
 	}
 
 	datasetStore, err := dataset.NewSQLiteStore(appConfig.Dataset.BasePath, appConfig.Dataset.MaxRecords)
 	if err != nil {
-		fmt.Printf("Failed to set up dataset store: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("setting up dataset store: %w", err)
 	}
 	defer datasetStore.Close()
 
@@ -203,8 +187,7 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 		err = fmt.Errorf("unsupported analytics driver %q", appConfig.Analytics.Driver)
 	}
 	if err != nil {
-		fmt.Printf("Failed to initialize analytics store: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initializing analytics store: %w", err)
 	}
 	defer analyticsStore.Close()
 
@@ -220,16 +203,14 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 
 	evaluator, err := models.NewEvaluationStrategy(selectedStrategy)
 	if err != nil {
-		fmt.Printf("Failed to initialize evaluation strategy: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initializing evaluation strategy: %w", err)
 	}
 
 	bayesianOpt, err := optimizer.NewGoptunaBayesianOptimizer(map[string]interface{}{
 		"num_trials": configManager.GetConfig().MiproV2.NumTrials,
 	})
 	if err != nil {
-		fmt.Printf("Failed to initialize Bayesian optimizer: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initializing Bayesian optimizer: %w", err)
 	}
 
 	opt := optimizer.NewMIPROv2(provider, evaluator, bayesianOpt, configManager.GetConfig().MiproV2)
@@ -279,8 +260,7 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 
 	gw, err := gateway.NewGateway(serviceConfig, gatewayConfig, appConfig, datasetStore, analyticsStore)
 	if err != nil {
-		fmt.Printf("Failed to create gateway: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("creating gateway: %w", err)
 	}
 
 	gw.RegisterProvider(providerAlias, provider)
@@ -289,8 +269,9 @@ func runGateway(cmd *cobra.Command, configManager *config.SimpleConfigManager, t
 	fmt.Println("Gateway is ready to handle requests...")
 
 	if err := gw.Start(); err != nil {
-		fmt.Printf("Failed to start gateway: %v\n", err)
+		return fmt.Errorf("starting gateway: %w", err)
 	}
+	return nil
 }
 
 func newModelProvider(providerAlias string, cfg *config.Config) (models.ModelProvider, error) {

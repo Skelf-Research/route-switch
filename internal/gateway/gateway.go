@@ -11,6 +11,7 @@ import (
 	"github.com/skelf-research/route-switch/internal/core"
 	"github.com/skelf-research/route-switch/internal/models"
 	"github.com/skelf-research/route-switch/internal/storage/dataset"
+	"github.com/skelf-research/route-switch/internal/utils"
 )
 
 // Gateway manages the complete route-switch functionality including
@@ -92,7 +93,7 @@ func (g *Gateway) loadCombinationsFromConfig(appConfig *config.Config) error {
 		if comboConfig.Metadata["optimized"] == nil || comboConfig.Metadata["optimized"] == false {
 			result, err := g.service.OptimizePromptWithTemplate(comboConfig.Prompt, comboConfig.Model, comboConfig.TemplateID)
 			if err != nil {
-				fmt.Printf("Warning: Failed to optimize prompt for %s, using original: %v\n", comboConfig.Name, err)
+				utils.Warn("Failed to optimize prompt, using original", "combination", comboConfig.Name, "error", err)
 				optimizedPrompt = comboConfig.Prompt
 			} else {
 				optimizedPrompt = result.OptimizedPrompt
@@ -138,7 +139,7 @@ func (g *Gateway) loadCombinationsFromConfig(appConfig *config.Config) error {
 		// If this is a primary model, we might want to track it specially
 		if comboConfig.IsPrimary {
 			// For now we just log it, but we could add special handling for primary models
-			fmt.Printf("Primary model combination loaded: %s (Model: %s)\n", comboConfig.Name, comboConfig.Model)
+			utils.Info("Primary model combination loaded", "name", comboConfig.Name, "model", comboConfig.Model)
 		}
 	}
 

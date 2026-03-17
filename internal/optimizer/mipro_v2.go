@@ -8,6 +8,7 @@ import (
 
 	"github.com/skelf-research/route-switch/internal/config"
 	"github.com/skelf-research/route-switch/internal/models"
+	"github.com/skelf-research/route-switch/internal/utils"
 )
 
 // MIPROv2Config holds configuration parameters for MIPROv2
@@ -77,21 +78,21 @@ func (m *MIPROv2) Optimize(prompt string, modelName string) (string, error) {
 	}
 
 	// Step 1: Bootstrap Few-Shot Examples
-	fmt.Println("Step 1: Bootstrapping few-shot examples...")
+	utils.Debug("MIPROv2 Step 1: Bootstrapping few-shot examples")
 	fewShotCandidates, err := m.bootstrapFewShotExamples(prompt, modelName, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to bootstrap few-shot examples: %w", err)
 	}
 
 	// Step 2: Propose Instruction Candidates
-	fmt.Println("Step 2: Proposing instruction candidates...")
+	utils.Debug("MIPROv2 Step 2: Proposing instruction candidates")
 	instructionCandidates, err := m.proposeInstructionCandidates(prompt, modelName, fewShotCandidates)
 	if err != nil {
 		return "", fmt.Errorf("failed to propose instruction candidates: %w", err)
 	}
 
 	// Step 3: Find an Optimized Combination using Bayesian Optimization
-	fmt.Println("Step 3: Finding optimized combination...")
+	utils.Debug("MIPROv2 Step 3: Finding optimized combination")
 	result, err := m.optimizeCombination(prompt, model, fewShotCandidates, instructionCandidates, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to optimize combination: %w", err)
@@ -382,7 +383,7 @@ func (m *MIPROv2) OptimizePrompt(basePrompt string, model models.Model, examples
 	}
 
 	// Step 1: Bootstrap Few-Shot Examples
-	fmt.Println("Step 1: Bootstrapping few-shot examples...")
+	utils.Debug("MIPROv2 Step 1: Bootstrapping few-shot examples")
 	fewShotCandidates, err := m.bootstrapFewShotExamples(basePrompt, model.Name, internalExamples)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bootstrap few-shot examples: %w", err)
@@ -394,14 +395,14 @@ func (m *MIPROv2) OptimizePrompt(basePrompt string, model models.Model, examples
 	}
 
 	// Step 2: Propose Instruction Candidates
-	fmt.Println("Step 2: Proposing instruction candidates...")
+	utils.Debug("MIPROv2 Step 2: Proposing instruction candidates")
 	instructionCandidates, err := m.proposeInstructionCandidates(basePrompt, model.Name, fewShotCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("failed to propose instruction candidates: %w", err)
 	}
 
 	// Step 3: Find an Optimized Combination using Bayesian Optimization
-	fmt.Println("Step 3: Finding optimized combination...")
+	utils.Debug("MIPROv2 Step 3: Finding optimized combination")
 	result, err := m.optimizeCombination(basePrompt, model, fewShotCandidates, instructionCandidates, internalExamples)
 	if err != nil {
 		return nil, fmt.Errorf("failed to optimize combination: %w", err)
