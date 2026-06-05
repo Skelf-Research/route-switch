@@ -225,7 +225,7 @@ Global analytics summary.
 `internal/core`
 
 ```go
-import "route-switch/internal/core"
+import "github.com/skelf-research/route-switch/internal/core"
 
 // Create service
 svc := core.NewService(&core.ServiceConfig{
@@ -261,7 +261,7 @@ type Result struct {
 `internal/storage/dataset`
 
 ```go
-import "route-switch/internal/storage/dataset"
+import "github.com/skelf-research/route-switch/internal/storage/dataset"
 
 // Create store
 store, err := dataset.NewSQLiteStore("data/prompts", 1000)
@@ -304,7 +304,7 @@ type Record struct {
 `internal/optimizer`
 
 ```go
-import "route-switch/internal/optimizer"
+import "github.com/skelf-research/route-switch/internal/optimizer"
 
 // Create MIPROv2 optimizer
 opt := optimizer.NewMIPROv2(
@@ -330,7 +330,7 @@ result, err := opt.Optimize(ctx, prompt, dataset)
 `internal/models`
 
 ```go
-import "route-switch/internal/models"
+import "github.com/skelf-research/route-switch/internal/models"
 
 type ModelProvider interface {
     ListModels() ([]Model, error)
@@ -355,7 +355,7 @@ type ModelProvider interface {
 `internal/analytics`
 
 ```go
-import "route-switch/internal/analytics"
+import "github.com/skelf-research/route-switch/internal/analytics"
 
 // Create store
 store, err := analytics.NewDuckDBStore("data/analytics/metrics.duckdb")

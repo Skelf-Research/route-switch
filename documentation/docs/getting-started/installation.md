@@ -4,15 +4,24 @@ This guide covers how to install and set up Route-Switch on your system.
 
 ## Prerequisites
 
-- **Go 1.21+** - Route-Switch is built with Go
+- **Go 1.24+** - the module declares `go 1.24` (see `go.mod`)
 - **API Keys** - At least one provider API key (OpenAI, Anthropic, etc.)
+- **C toolchain** - DuckDB analytics requires cgo; ensure a working `gcc`/`clang` on the host
 
 ## Building from Source
 
-Clone the repository and build the binary:
+Use the installer for a turnkey build:
 
 ```bash
-git clone https://github.com/your-org/route-switch.git
+git clone https://github.com/Skelf-Research/route-switch.git
+cd route-switch
+./install.sh
+```
+
+Or build manually:
+
+```bash
+git clone https://github.com/Skelf-Research/route-switch.git
 cd route-switch
 go build -o route-switch
 ```
@@ -67,13 +76,35 @@ gateway:
 
 ## Environment Variables
 
-You can provide API keys via environment variables instead of the config file:
+The config manager (`internal/config/manager.go`) overlays the following environment variables on top of `config.yaml`. Provider keys are checked in order — the `ROUTE_SWITCH_*` form wins over the standard form, which wins over whatever is in the file.
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `GOOGLE_API_KEY` | Google AI API key |
+| `ROUTE_SWITCH_<PROVIDER>_API_KEY` | Provider-scoped override, e.g. `ROUTE_SWITCH_OPENAI_API_KEY` |
+| `OPENAI_API_KEY` | Standard OpenAI key fallback |
+| `ANTHROPIC_API_KEY` | Standard Anthropic key fallback |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Google / Gemini key fallback |
+| `COHERE_API_KEY` | Cohere key fallback |
+| `MISTRAL_API_KEY` | Mistral key fallback |
+| `GROQ_API_KEY` | Groq key fallback |
+| `ROUTE_SWITCH_ANALYTICS_PATH` | Override DuckDB analytics file path |
+| `ROUTE_SWITCH_DATASET_PATH` | Override dataset base path |
+
+This matches the [`env_only`](https://github.com/Skelf-Research/route-switch/blob/main/internal/config/manager.go) secrets posture: nothing is read from a keyring or encrypted file.
+
+## Makefile Targets
+
+The repository ships a `Makefile` for common workflows:
+
+| Target | Description |
+|--------|-------------|
+| `make build` | `go build -o route-switch` |
+| `make test` | `go test ./...` |
+| `make test-coverage` | `go test -cover ./...` |
+| `make example` | Run `./example.sh` |
+| `make clean` | Remove the binary |
+| `make deps` | `go mod tidy` |
+| `make run` | Build then run the binary |
 
 ## Directory Structure
 

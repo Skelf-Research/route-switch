@@ -154,8 +154,10 @@ gateway:
 | Strategy | Description |
 |----------|-------------|
 | `round_robin` | Rotate through combinations evenly |
-| `weighted_round_robin` | Respect combination weights |
+| `random` | Uniform random selection across enabled combinations |
+| `weighted_round_robin` | Weighted random by `weight` |
 | `performance_based` | Route based on success rate and latency |
+| `least_connections` | Route to the combination with the fewest in-flight requests |
 
 ## Prompt Combinations
 

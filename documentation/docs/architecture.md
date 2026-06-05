@@ -187,10 +187,11 @@ internal/
 │   ├── load_balancer.go# Load balancing
 │   └── prompt_registry.go
 │
-├── models/             # Model providers
+├── models/             # Model providers + evaluators
 │   ├── models.go       # Interfaces
 │   ├── gollm_provider.go
 │   ├── mock_provider.go
+│   ├── evaluation_factory.go
 │   ├── similarity_eval.go
 │   ├── keyword_match_eval.go
 │   └── exact_match_eval.go

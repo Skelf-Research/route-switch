@@ -201,11 +201,13 @@ gateway:
 | `optimization.interval_seconds` | int | 3600 | Optimization interval |
 | `combinations` | array | - | Static prompt/model combinations |
 
-**Strategies:**
+**Strategies (defined in `internal/gateway/load_balancer.go`):**
 
-- `round_robin` - Even rotation
-- `weighted_round_robin` - Respect weights
-- `performance_based` - Route by performance
+- `round_robin` - Even rotation across enabled combinations
+- `random` - Uniform random selection
+- `weighted_round_robin` - Weighted random by `weight`
+- `performance_based` - Route by recent success rate and latency
+- `least_connections` - Route to the combination with the fewest in-flight requests
 
 **Combination Fields:**
 
@@ -266,12 +268,18 @@ Additional validation occurs at service startup.
 
 ## Environment Variables
 
-Provider keys can be read from environment:
+Environment overrides are applied in `internal/config/manager.go` after the file is parsed. Provider keys are checked in this priority order: `ROUTE_SWITCH_<PROVIDER>_API_KEY` → standard form → value in `model_providers.<provider>.api_key`.
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `GOOGLE_API_KEY` | Google AI API key |
+| `ROUTE_SWITCH_<PROVIDER>_API_KEY` | Provider-scoped override |
+| `OPENAI_API_KEY` | OpenAI key fallback |
+| `ANTHROPIC_API_KEY` | Anthropic key fallback |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Google / Gemini key fallback |
+| `COHERE_API_KEY` | Cohere key fallback |
+| `MISTRAL_API_KEY` | Mistral key fallback |
+| `GROQ_API_KEY` | Groq key fallback |
+| `ROUTE_SWITCH_ANALYTICS_PATH` | Override DuckDB analytics file path |
+| `ROUTE_SWITCH_DATASET_PATH` | Override dataset base path |
 
-Environment variables override config file values.
+This is intentional: Route-Switch never reads secrets from a keyring or encrypted file. The expectation is env-only secret injection in deployment.

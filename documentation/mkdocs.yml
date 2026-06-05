@@ -1,9 +1,10 @@
 site_name: Route-Switch
 site_description: A Go-powered prompt function manager with MIPROv2 optimization and multi-provider routing
-site_url: https://route-switch.dev
+site_url: https://docs.skelfresearch.com/route-switch/
 
-repo_name: route-switch
-repo_url: https://github.com/your-org/route-switch
+repo_name: Skelf-Research/route-switch
+repo_url: https://github.com/Skelf-Research/route-switch
+edit_uri: edit/main/documentation/docs/
 
 theme:
   name: material
@@ -69,4 +70,4 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-org/route-switch
+      link: https://github.com/Skelf-Research/route-switch

@@ -236,13 +236,19 @@ Override any setting with explicit flags.
 
 ## Environment Variables
 
-Provider keys from environment:
+Provider keys are loaded after the YAML file. `ROUTE_SWITCH_<PROVIDER>_API_KEY` takes precedence over the standard form, which in turn overrides values in `model_providers.<provider>.api_key`.
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `GOOGLE_API_KEY` | Google AI API key |
+| `ROUTE_SWITCH_<PROVIDER>_API_KEY` | Provider-scoped override (e.g. `ROUTE_SWITCH_OPENAI_API_KEY`) |
+| `OPENAI_API_KEY` | OpenAI key fallback |
+| `ANTHROPIC_API_KEY` | Anthropic key fallback |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Google / Gemini key fallback |
+| `COHERE_API_KEY` | Cohere key fallback |
+| `MISTRAL_API_KEY` | Mistral key fallback |
+| `GROQ_API_KEY` | Groq key fallback |
+| `ROUTE_SWITCH_ANALYTICS_PATH` | Override DuckDB analytics file path |
+| `ROUTE_SWITCH_DATASET_PATH` | Override dataset base path |
 
 ---
 
