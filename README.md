@@ -8,6 +8,12 @@
 
 Route-Switch is a production-ready gateway that routes requests across multiple LLM providers, automatically optimizes prompts using MIPROv2, and tracks performance analytics — all through a single OpenAI-compatible API.
 
+<p align="center">
+  <a href="https://route-switch.skelfresearch.com"><b>Website</b></a> •
+  <a href="https://docs.skelfresearch.com/route-switch">Documentation</a> •
+  <a href="https://skelfresearch.com">Skelf Research</a>
+</p>
+
 ## Features
 
 - **Multi-Provider Routing** — OpenAI, Anthropic, Google, Ollama, Cohere, Mistral, and more via [gollm](https://github.com/teilomillet/gollm)
@@ -140,3 +146,15 @@ With template variables:
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Part of Skelf Research
+
+`route-switch` is built by **[Skelf Research](https://skelfresearch.com)** — an independent UK AI research lab publishing production-grade open-source projects.
+
+🌐 [Website](https://route-switch.skelfresearch.com) · 📚 [Documentation](https://docs.skelfresearch.com/route-switch) · 🔬 [All projects](https://skelfresearch.com/projects) · 🤗 [Hugging Face](https://huggingface.co/skelfresearch)
+
+**Related projects:** [perishable](https://perishable.skelfresearch.com) (hide your API keys), [promptel](https://promptel.skelfresearch.com) (declarative prompt DSL), [blogus](https://blogus.skelfresearch.com) (package.lock for prompts)
+
+<sub>Released under MIT / Apache-2.0. © Skelf Research Limited.</sub>
